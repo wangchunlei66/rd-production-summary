@@ -3,23 +3,11 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import timezone, timedelta, datetime
 
 ENVS = {
-    "test": "http://172.16.32.110:8090/zqyl-pm-api",
+    "test": "http://103.234.22.57:8090/zqyl-pm-api",
     "prod": "http://172.16.18.30:58184/zqyl-pm-api",
 }
-
-CST = timezone(timedelta(hours=8))
-
-
-def ts_to_date(ts):
-    if ts is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(ts) / 1000, tz=CST).strftime("%Y-%m-%d")
-    except Exception:
-        return None
 
 
 def main():
@@ -60,30 +48,82 @@ def main():
         sys.exit(1)
 
     raw_data = response.get("data") or {}
-    items = raw_data if isinstance(raw_data, list) else raw_data.get("list") or []
-    total = raw_data.get("total") if isinstance(raw_data, dict) else None
+    # 接口契约：{ grandTotal, groups: [{ productLine, total, items: [...] }] }
+    if isinstance(raw_data, list):
+        groups_src = raw_data
+        grand_total = None
+    else:
+        groups_src = raw_data.get("groups") or raw_data.get("list") or []
+        grand_total = raw_data.get("grandTotal")
+        if grand_total is None:
+            grand_total = raw_data.get("total")
 
-    result_items = []
-    for item in items:
-        result_items.append(
-            {
-                "jiraNo": item.get("jiraNo"),
+    result_groups = []
+    flat_list = []
+    for group in groups_src:
+        if not isinstance(group, dict):
+            continue
+        # 兼容已是平铺 item 的旧格式
+        if "items" not in group and (group.get("jiraId") or group.get("jiraNo") or group.get("projectName")):
+            item = group
+            processed = {
+                "projectId": item.get("projectId"),
+                "jiraId": item.get("jiraId") or item.get("jiraNo"),
                 "projectName": item.get("projectName"),
-                "productLine": item.get("productLine"),
+                "productLine": item.get("productLineName") or item.get("productLine"),
                 "keyValue": item.get("keyValue"),
-                "description": item.get("description"),
-                "windowType": item.get("windowType"),
+                "description": item.get("projectDescribe") or item.get("description"),
+                "windowType": item.get("topLineTypeName") or item.get("windowType"),
+                "topLineType": item.get("topLineType"),
                 "onlineDate": item.get("onlineDate"),
-                "onlineDateYmd": ts_to_date(item.get("onlineDate")),
+            }
+            flat_list.append(processed)
+            continue
+
+        processed_items = []
+        product_line = group.get("productLine")
+        for item in group.get("items") or []:
+            processed = {
+                "projectId": item.get("projectId"),
+                "jiraId": item.get("jiraId") or item.get("jiraNo"),
+                "projectName": item.get("projectName"),
+                "productLine": item.get("productLineName") or product_line,
+                "keyValue": item.get("keyValue"),
+                "description": item.get("projectDescribe") or item.get("description"),
+                "windowType": item.get("topLineTypeName") or item.get("windowType"),
+                "topLineType": item.get("topLineType"),
+                "onlineDate": item.get("onlineDate"),
+            }
+            processed_items.append(processed)
+            flat_list.append(processed)
+
+        result_groups.append(
+            {
+                "productLine": product_line,
+                "total": group.get("total", len(processed_items)),
+                "items": processed_items,
             }
         )
+
+    if flat_list and not result_groups:
+        # 平铺列表归并展示用 groups
+        by_line = {}
+        for item in flat_list:
+            pl = item.get("productLine") or "其他"
+            by_line.setdefault(pl, []).append(item)
+        for pl, items in by_line.items():
+            result_groups.append({"productLine": pl, "total": len(items), "items": items})
+
+    if grand_total is None:
+        grand_total = sum(g.get("total", 0) for g in result_groups)
 
     result = {
         "yearMonth": args.yearMonth,
         "page": args.page,
         "pageRow": args.pageRow,
-        "total": total,
-        "list": result_items,
+        "grandTotal": grand_total,
+        "groups": result_groups,
+        "list": flat_list,
     }
 
     print(json.dumps(result, ensure_ascii=False, indent=2))

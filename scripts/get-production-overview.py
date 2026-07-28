@@ -6,7 +6,7 @@ import urllib.request
 from datetime import timezone, timedelta, datetime
 
 ENVS = {
-    "test": "http://172.16.32.110:8090/zqyl-pm-api",
+    "test": "http://103.234.22.57:8090/zqyl-pm-api",
     "prod": "http://172.16.18.30:58184/zqyl-pm-api",
 }
 

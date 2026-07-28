@@ -45,13 +45,18 @@ Python 版仅依赖标准库（无需 pip），PowerShell 版依赖系统内置 
 
 ### `get-launch-list.py`
 
-- 作用：查询已上线项目清单（分页）。
+- 作用：查询已上线项目清单（按产品线分组，分页）。
 - 接口：`/report/productionSummary/launchList`
 - 参数：
   - `--yearMonth`（必填）：月份，格式 `YYYY-MM`
   - `--page`（可选，默认 `1`）：页码
   - `--pageRow`（可选，默认 `20`）：每页条数
   - `--env`（可选，默认 `prod`）：`test` 或 `prod`
+- 输出要点：
+  - `grandTotal`：已上线项目总数
+  - `groups`：按产品线分组（`productLine` / `total` / `items`）
+  - `list`：平铺列表
+  - 字段映射：`jiraId`←接口 `jiraId`；`description`←`projectDescribe`；`windowType`←`topLineTypeName`；`onlineDate` 多为 `MM.DD` 字符串
 - 用法：
   - `python scripts/get-launch-list.py --yearMonth 2026-07`
   - `python scripts/get-launch-list.py --yearMonth 2026-07 --page 2 --pageRow 50`
@@ -76,11 +81,17 @@ Python 版仅依赖标准库（无需 pip），PowerShell 版依赖系统内置 
 
 ### `get-pending-demands.py`
 
-- 作用：查询待投产需求点列表，按产品线分组汇总。
+- 作用：查询待投产需求点列表；输出原始分组、7 类归并与数据源分类汇总。
 - 接口：`/report/productionSummary/pendingDemands`
 - 参数：
   - `--yearMonth`（必填）：月份，格式 `YYYY-MM`
   - `--env`（可选，默认 `prod`）：`test` 或 `prod`
+- 输出要点：
+  - `grandTotal`：待投产需求总量
+  - `groups`：接口原始产品线分组（`productLine` / `total` / `items`）
+  - `canonicalGroups`：按固定 7 类（链数、云链证、云信、链信APP、信企直连、基础服务、其他）归并
+  - `dataSourceSummary`：`DEMAND` / `NEED_DESIGNING` / `NEED_DESIGNED` / `PROJECT` 及其中文 `label`、`count`
+  - `items` 字段：`code`、`name`、`productLine`、`description`、`planOnlineDate`、`reqDepartment`、`dataSource`
 - 用法：
   - `python scripts/get-pending-demands.py --yearMonth 2026-07`
   - `python scripts/get-pending-demands.py --env test --yearMonth 2026-07`

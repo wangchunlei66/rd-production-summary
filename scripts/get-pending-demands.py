@@ -3,23 +3,131 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import timezone, timedelta, datetime
+from collections import OrderedDict
 
 ENVS = {
-    "test": "http://172.16.32.110:8090/zqyl-pm-api",
+    "test": "http://103.234.22.57:8090/zqyl-pm-api",
     "prod": "http://172.16.18.30:58184/zqyl-pm-api",
 }
 
-CST = timezone(timedelta(hours=8))
+CANONICAL_PRODUCT_LINES = (
+    "链数",
+    "云链证",
+    "云信",
+    "链信APP",
+    "信企直连",
+    "基础服务",
+    "其他",
+)
+
+DATA_SOURCE_LABELS = OrderedDict(
+    [
+        ("DEMAND", "待投产的需求点"),
+        ("NEED_DESIGNING", "产品源设计中"),
+        ("NEED_DESIGNED", "产品源设计完成"),
+        ("PROJECT", "项目数据"),
+    ]
+)
 
 
-def ts_to_date(ts):
-    if ts is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(ts) / 1000, tz=CST).strftime("%Y-%m-%d")
-    except Exception:
-        return None
+def normalize_product_line(raw):
+    if raw is None:
+        return "其他"
+    name = "".join(str(raw).split())
+    if not name:
+        return "其他"
+    if "链信" in name and ("APP" in name.upper() or "客户端" in name):
+        return "链信APP"
+    for canonical in CANONICAL_PRODUCT_LINES[:-1]:
+        if canonical in name or name in canonical:
+            return canonical
+    return "其他"
+
+
+def process_item(item):
+    return {
+        "code": item.get("code") or item.get("jiraNo"),
+        "name": item.get("name") or item.get("projectName"),
+        "productLine": item.get("productLine"),
+        "description": item.get("description"),
+        "planOnlineDate": item.get("planOnlineDate") or None,
+        "reqDepartment": item.get("reqDepartment") or item.get("sourceDept"),
+        "dataSource": item.get("dataSource"),
+    }
+
+
+def extract_groups(raw_data):
+    groups = []
+    if isinstance(raw_data, list):
+        for group in raw_data:
+            if isinstance(group, dict) and "items" in group:
+                items = [process_item(it) for it in (group.get("items") or [])]
+                groups.append(
+                    {
+                        "productLine": group.get("productLine"),
+                        "total": group.get("total", group.get("count", len(items))),
+                        "items": items,
+                    }
+                )
+            elif isinstance(group, dict):
+                pl = group.get("productLine")
+                if not groups or groups[-1].get("productLine") != pl:
+                    groups.append({"productLine": pl, "total": 0, "items": []})
+                groups[-1]["items"].append(process_item(group))
+                groups[-1]["total"] = len(groups[-1]["items"])
+    elif isinstance(raw_data, dict):
+        source = raw_data.get("groups") or raw_data.get("list") or []
+        for group in source:
+            items = [process_item(it) for it in (group.get("items") or [])]
+            groups.append(
+                {
+                    "productLine": group.get("productLine"),
+                    "total": group.get("total", group.get("count", len(items))),
+                    "items": items,
+                }
+            )
+    return groups
+
+
+def build_canonical_groups(groups):
+    buckets = OrderedDict((name, []) for name in CANONICAL_PRODUCT_LINES)
+    for group in groups:
+        canonical = normalize_product_line(group.get("productLine"))
+        for item in group.get("items") or []:
+            enriched = dict(item)
+            enriched["canonicalProductLine"] = canonical
+            buckets[canonical].append(enriched)
+    result = []
+    for name, items in buckets.items():
+        if not items:
+            continue
+        result.append(
+            {
+                "productLine": name,
+                "total": len(items),
+                "items": items,
+            }
+        )
+    return result
+
+
+def build_data_source_summary(groups):
+    counts = {code: 0 for code in DATA_SOURCE_LABELS}
+    for group in groups:
+        for item in group.get("items") or []:
+            code = item.get("dataSource")
+            if code in counts:
+                counts[code] += 1
+            elif code:
+                counts.setdefault(code, 0)
+                counts[code] += 1
+    summary = []
+    for code, label in DATA_SOURCE_LABELS.items():
+        summary.append({"code": code, "label": label, "count": counts.get(code, 0)})
+    for code, count in counts.items():
+        if code not in DATA_SOURCE_LABELS:
+            summary.append({"code": code, "label": code, "count": count})
+    return summary
 
 
 def main():
@@ -51,86 +159,22 @@ def main():
         sys.exit(1)
 
     raw_data = response.get("data") or {}
-
-    # 数据可能为分组列表（按产品线）或平铺列表，兼容两种格式
-    groups = []
-    if isinstance(raw_data, list):
-        for group in raw_data:
-            if isinstance(group, dict) and "items" in group:
-                # 已分组格式
-                processed_items = []
-                for item in (group.get("items") or []):
-                    processed_items.append(
-                        {
-                            "jiraNo": item.get("jiraNo"),
-                            "projectName": item.get("projectName"),
-                            "productLine": item.get("productLine"),
-                            "description": item.get("description"),
-                            "planOnlineTime": item.get("planOnlineTime"),
-                            "planOnlineDate": ts_to_date(item.get("planOnlineTime")),
-                            "sourceDept": item.get("sourceDept"),
-                        }
-                    )
-                groups.append(
-                    {
-                        "productLine": group.get("productLine"),
-                        "count": group.get("count", len(processed_items)),
-                        "items": processed_items,
-                    }
-                )
-            else:
-                # 平铺列表，归入"未分组"
-                if not groups or groups[-1].get("productLine") != group.get("productLine"):
-                    groups.append(
-                        {
-                            "productLine": group.get("productLine"),
-                            "count": 0,
-                            "items": [],
-                        }
-                    )
-                groups[-1]["items"].append(
-                    {
-                        "jiraNo": group.get("jiraNo"),
-                        "projectName": group.get("projectName"),
-                        "productLine": group.get("productLine"),
-                        "description": group.get("description"),
-                        "planOnlineTime": group.get("planOnlineTime"),
-                        "planOnlineDate": ts_to_date(group.get("planOnlineTime")),
-                        "sourceDept": group.get("sourceDept"),
-                    }
-                )
-                groups[-1]["count"] = len(groups[-1]["items"])
-    elif isinstance(raw_data, dict):
-        # 可能是 { groups: [...] } 或 { list: [...] }
-        source = raw_data.get("groups") or raw_data.get("list") or []
-        for group in source:
-            processed_items = []
-            for item in (group.get("items") or []):
-                processed_items.append(
-                    {
-                        "jiraNo": item.get("jiraNo"),
-                        "projectName": item.get("projectName"),
-                        "productLine": item.get("productLine"),
-                        "description": item.get("description"),
-                        "planOnlineTime": item.get("planOnlineTime"),
-                        "planOnlineDate": ts_to_date(item.get("planOnlineTime")),
-                        "sourceDept": item.get("sourceDept"),
-                    }
-                )
-            groups.append(
-                {
-                    "productLine": group.get("productLine"),
-                    "count": group.get("count", len(processed_items)),
-                    "items": processed_items,
-                }
-            )
-
-    total_count = sum(g.get("count", 0) for g in groups)
+    groups = extract_groups(raw_data)
+    groups_sum = sum(g.get("total", 0) for g in groups)
+    grand_total = (
+        raw_data.get("grandTotal")
+        if isinstance(raw_data, dict) and raw_data.get("grandTotal") is not None
+        else groups_sum
+    )
+    canonical_groups = build_canonical_groups(groups)
+    data_source_summary = build_data_source_summary(groups)
 
     result = {
         "yearMonth": args.yearMonth,
-        "totalCount": total_count,
+        "grandTotal": grand_total,
         "groups": groups,
+        "canonicalGroups": canonical_groups,
+        "dataSourceSummary": data_source_summary,
     }
 
     print(json.dumps(result, ensure_ascii=False, indent=2))

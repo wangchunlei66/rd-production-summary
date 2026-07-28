@@ -5,7 +5,7 @@
 ## 手册文件
 
 - `production-summary-manual.md`：投产情况汇报模块使用手册（流程、字段说明、常见问题）
-- `capability-analysis-template.md`：月度完整汇报中「上个月两项能力分析」「重点功能分析」的版式模板（正文由接口清单归纳，非静态文案）
+- `capability-analysis-template.md`：月度完整汇报中「上个月两项能力分析」「重点功能分析」（按 7 类产品线平铺分节）的版式模板；正文由接口清单归纳，非静态文案
 
 ## 建议章节结构
 
